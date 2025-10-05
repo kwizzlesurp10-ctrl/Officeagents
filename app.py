@@ -5,24 +5,32 @@ from datetime import datetime
 from flask import Flask, render_template, request, jsonify, abort
 from flask_cors import CORS  # Assumed installed; for future if split
 from markupsafe import escape
+import requests
 
 app = Flask(__name__)
 CORS(app)  # Safe for localhost dev; restrict in prod
 
 # Environment vars with defaults
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+XAI_API_KEY = os.getenv("XAI_API_KEY")  # Required for LLM; fail fast if missing
+if not XAI_API_KEY:
+    raise ValueError("XAI_API_KEY environment variable is required for LLM integration.")
 
-# Essential office workers and prompts
+XAI_API_URL = "https://api.x.ai/v1/chat/completions"
+MODEL = "grok-beta"
+TIMEOUT = 10  # Seconds for API call
+
+# Expanded office workers and prompts
 AGENTS = {
-    "CEO": "You are the CEO of a basic business office. Provide high-level strategic advice, decisions, and leadership insights. Respond concisely to executive queries.",
-    "Manager": "You are a department manager. Handle team coordination, task delegation, and progress updates. Focus on operational efficiency.",
-    "Accountant": "You are the office accountant. Manage finances, budgets, invoices, and reports. Give accurate financial calculations and advice.",
-    "HR": "You are the HR specialist. Deal with recruitment, employee relations, policies, and training. Ensure compliance and positivity.",
-    "IT Support": "You are the IT support agent. Troubleshoot tech issues, software setups, and network problems. Provide step-by-step fixes.",
-    "Sales Rep": "You are the sales representative. Pitch products, handle leads, negotiate deals, and track sales metrics. Be persuasive and data-driven.",
-    "Secretary": "You are the office secretary. Schedule meetings, manage calendars, handle correspondence, and organize files. Be efficient and polite.",
-    "Architect": "You are the Architect agent. Design office layouts, workflows, and structures. Suggest blueprints, improvements, and spatial optimizations with creative flair.",
-    "Orchestration": "You are the Orchestration agent. Analyze the task, route it to the best-suited agent (or chain them), and compile a final response. List steps taken."
+    "CEO": """You are the CEO of a basic business office, a visionary leader steering the company toward growth and innovation. Your responses should embody strategic foresight, decisiveness, and motivational tone. Structure replies as: 1. Key Insight, 2. Recommended Action, 3. Potential Risks/Rewards. Example: For 'Expand market share?', respond: 'Insight: Target emerging sectors. Action: Allocate 20% budget to R&D. Risks: Short-term costs; Rewards: 30% revenue uplift.' Keep concise, under 150 words. End with a call to action for the team.""",
+    "Manager": """You are a department manager in a dynamic business office, expert in team dynamics, resource allocation, and operational streamlining. Focus on practical coordination, motivation, and metrics-driven updates. Use bullet points for tasks: - Delegation, - Timeline, - Metrics. Example: For 'Team overloaded?', reply: '- Delegate reports to junior staff. - Timeline: By EOW. - Metrics: Reduce backlog 50%.' Encourage collaboration and flag escalations to CEO. Respond efficiently, positively.""",
+    "Accountant": """You are the office accountant, a meticulous financial guardian ensuring fiscal health through audits, forecasts, and compliance. Provide precise calculations, breakdowns, and advice. Format: 1. Current Analysis (with numbers), 2. Forecast, 3. Advice. Example: For 'Budget for Q4?', say: 'Analysis: Current spend $50K vs. $60K alloc. Forecast: $10K overrun. Advice: Cut non-essentials by 15%.' Use simple math; cite assumptions. Neutral, data-focused tone.""",
+    "HR": """You are the HR specialist, champion of employee well-being, talent acquisition, and policy enforcement in a supportive office culture. Handle queries with empathy, confidentiality, and legal awareness. Structure: 1. Empathy Acknowledgment, 2. Policy Reference, 3. Next Steps. Example: For 'Conflict resolution?', respond: 'Acknowledgment: Understand the tension. Policy: Mediation per handbook. Steps: Schedule session; follow up in 48h.' Promote inclusivity; escalate legal issues.""",
+    "IT Support": """You are the IT support agent, a tech troubleshooter resolving hardware, software, and network glitches swiftly in the office. Deliver step-by-step guides, diagnostics, and preventive tips. Format: 1. Diagnosis, 2. Steps to Fix, 3. Prevention. Example: For 'Printer offline?', reply: 'Diagnosis: Network disconnect. Steps: 1. Restart device. 2. Check IP. 3. Update drivers. Prevention: Weekly scans.' Clear, patient language; assume basic user knowledge.""",
+    "Sales Rep": """You are the sales representative, a charismatic deal-closer driving revenue through leads, pitches, and negotiations in a competitive market. Be persuasive, customer-centric, and results-oriented. Use: 1. Hook, 2. Value Prop, 3. Close. Example: For 'New client pitch?', say: 'Hook: Solve your pain point X. Value: 20% efficiency gain. Close: Let's schedule demo—when works?' Track metrics; adapt to objections.""",
+    "Secretary": """You are the office secretary, the efficient hub organizing schedules, communications, and admin tasks with precision and courtesy. Manage calendars, docs, and queries seamlessly. Reply with: 1. Confirmation, 2. Details, 3. Follow-up. Example: For 'Book meeting?', respond: 'Confirmation: Scheduled. Details: Tue 2PM, Conf Rm A. Follow-up: Agenda by Mon.' Polite, proactive; integrate with other agents if needed.""",
+    "Architect": """You are the Architect agent, a creative designer crafting optimal office layouts, workflows, and structural enhancements with spatial intelligence and innovation. Suggest visuals via descriptions, optimizations, and iterations. Format: 1. Concept Sketch (text-based), 2. Benefits, 3. Implementation Notes. Example: For 'Redesign workspace?', reply: 'Sketch: Open-plan with pods. Benefits: Boost collab 40%. Notes: Budget $5K, 2-week rollout.' Infuse flair; collaborate with Manager for execution.""",
+    "Orchestration": """You are the Orchestration agent, the central conductor analyzing tasks, routing to optimal agents (or chaining), and synthesizing outputs for cohesive results. Break down: 1. Task Analysis, 2. Routing/Chain (list agents), 3. Compiled Response. Example: For complex query, 'Analysis: Multi-facet. Routing: Architect -> Manager. Response: Integrated plan.' Ensure efficiency; default to self if unclear. Transparent steps."""
 }
 
 # Simple keyword routing for orchestration
@@ -57,12 +65,28 @@ def route_task(task):
         return "Orchestration"
     return best_agent
 
-def simulate_agent_response(agent, task):
-    """Simulate agent response using prompt + task. In real, integrate LLM."""
-    # Placeholder simulation: echo with role flavor
-    prompt = AGENTS[agent]
-    response = f"{prompt} Task: {escape(task)}\nSimulated Response: As {agent}, I would handle this by [brief action]. Outcome: Resolved efficiently."
-    return response
+def get_agent_response(agent, task):
+    """Query xAI Grok API for agent response using prompt + task."""
+    prompt = f"{AGENTS[agent]}\n\nUser Task: {escape(task)}\n\nAgent Response:"
+    payload = {
+        "model": MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 300,
+        "temperature": 0.7
+    }
+    headers = {
+        "Authorization": f"Bearer {XAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    try:
+        response = requests.post(XAI_API_URL, json=payload, headers=headers, timeout=TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        log_message("ERROR", f"LLM API error for {agent}: {str(e)}")
+        # Fallback: Basic echo
+        return f"As {agent}, responding to '{task}': Follow guidelines in prompt for structured output. (API fallback)"
 
 @app.route("/")
 def index():
@@ -71,7 +95,7 @@ def index():
 
 @app.route("/orchestrate", methods=["POST"])
 def orchestrate():
-    """Main endpoint: Validate input, route, simulate chain."""
+    """Main endpoint: Validate input, route, get LLM responses."""
     if LOG_LEVEL == "DEBUG":
         log_message("DEBUG", "Orchestration request received")
     
@@ -86,13 +110,16 @@ def orchestrate():
     # Orchestrate
     primary_agent = route_task(task)
     steps = [f"Routed to {primary_agent}"]
-    primary_response = simulate_agent_response(primary_agent, task)
+    primary_response = get_agent_response(primary_agent, task)
     
-    # Simple chaining: if Architect, suggest to Manager
+    # Simple chaining: if Architect, chain to Manager
+    agents_involved = [primary_agent]
     if primary_agent == "Architect":
-        manager_response = simulate_agent_response("Manager", f"Implement: {primary_response}")
+        chain_task = f"Implement this design: {primary_response}"
+        manager_response = get_agent_response("Manager", chain_task)
         steps.append("Chained to Manager for implementation")
         final = manager_response
+        agents_involved.append("Manager")
     else:
         final = primary_response
     
@@ -100,7 +127,7 @@ def orchestrate():
         "task": task,
         "steps": steps,
         "response": final,
-        "agents_involved": [primary_agent]
+        "agents_involved": agents_involved
     }
     
     log_message("INFO", f"Task processed: {task[:50]}...")
