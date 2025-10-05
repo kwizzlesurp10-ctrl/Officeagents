@@ -3,7 +3,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from app import app, get_agent_response, AGENTS
+from app import app, orchestrate_with_langchain, AGENT_PROMPTS
 import unittest.mock
 
 class TestOfficeCube(unittest.TestCase):
@@ -22,19 +22,25 @@ class TestOfficeCube(unittest.TestCase):
         data = rv.get_json()
         self.assertEqual(data['status'], 'healthy')
 
-    def test_orchestrate_valid(self):
-        """Integration: Valid task routes and gets LLM-flavored response."""
-        with unittest.mock.patch('requests.post') as mock_post:
-            mock_post.return_value.json.return_value = {
-                "choices": [{"message": {"content": "Mock LLM response"}}]
-            }
-            mock_post.return_value.raise_for_status = lambda: None
-            rv = self.client.post('/orchestrate', json={'task': 'Design layout'})
-            self.assertEqual(rv.status_code, 200)
-            data = rv.get_json()
-            self.assertIn('response', data)
-            self.assertEqual(data['response'], 'Mock LLM response')
-            self.assertIn('Architect', str(data['agents_involved']))
+    @unittest.mock.patch('langchain_core.output_parsers.JsonOutputParser')
+    @unittest.mock.patch('langchain_xai.ChatXAI')
+    def test_orchestrate_langchain(self, mock_llm, mock_parser):
+        """Integration: LangChain orchestration with mocks."""
+        mock_chain = unittest.mock.MagicMock()
+        mock_chain.invoke.return_value = "Mock response"
+        mock_llm.return_value = mock_chain
+        mock_parser.return_value = mock_chain
+
+        # Mock router output
+        mock_router = unittest.mock.MagicMock()
+        mock_router.invoke.return_value = {"agent": "CEO", "subtask": "Test", "chain_next": False}
+        # Patch agent_chains indirectly via global mock
+
+        rv = self.client.post('/orchestrate', json={'task': 'Strategy plan'})
+        self.assertEqual(rv.status_code, 200)
+        data = rv.get_json()
+        self.assertIn('response', data)
+        self.assertEqual(data['response'], 'Mock response')
 
     def test_orchestrate_invalid_length(self):
         """Unit: Invalid input rejected."""
@@ -44,28 +50,33 @@ class TestOfficeCube(unittest.TestCase):
 
     def test_agent_prompts(self):
         """Unit: Verify all expanded prompts exist and are detailed."""
-        self.assertEqual(len(AGENTS), 9)
-        for agent, prompt in AGENTS.items():
+        self.assertEqual(len(AGENT_PROMPTS), 9)
+        for agent, prompt in AGENT_PROMPTS.items():
             self.assertGreater(len(prompt), 100)  # Ensures expansion
             self.assertIn("You are", prompt)  # Basic structure check
 
-    @unittest.mock.patch('requests.post')
-    def test_get_agent_response_success(self, mock_post):
-        """Unit: LLM call succeeds."""
-        mock_post.return_value.json.return_value = {
-            "choices": [{"message": {"content": "Success response"}}]
-        }
-        mock_post.return_value.raise_for_status = lambda: None
-        response = get_agent_response("CEO", "Test task")
-        self.assertEqual(response, "Success response")
+    @unittest.mock.patch('langchain_xai.ChatXAI')
+    def test_orchestrate_with_langchain_success(self, mock_llm):
+        """Unit: LangChain orchestration succeeds."""
+        mock_chain = unittest.mock.MagicMock()
+        mock_chain.invoke.side_effect = [
+            {"agent": "CEO", "subtask": "Test", "chain_next": False},  # Router
+            "CEO Response"  # Agent
+        ]
+        mock_llm.return_value = mock_chain
 
-    @unittest.mock.patch('requests.post')
-    def test_get_agent_response_fallback(self, mock_post):
-        """Unit: LLM call fails, uses fallback."""
-        mock_post.side_effect = Exception("API error")
-        response = get_agent_response("CEO", "Test task")
-        self.assertIn("As CEO", response)
-        self.assertIn("API fallback", response)
+        result = orchestrate_with_langchain("Test task")
+        self.assertIn("CEO", str(result['agents_involved']))
+        self.assertEqual(result['response'], "CEO Response")
+
+    @unittest.mock.patch('langchain_xai.ChatXAI')
+    def test_orchestrate_with_langchain_fallback(self, mock_llm):
+        """Unit: LangChain orchestration falls back on error."""
+        mock_llm.side_effect = Exception("Chain error")
+
+        result = orchestrate_with_langchain("Test task")
+        self.assertIn("Fallback", result['steps'][0])
+        self.assertIn("Error", result['response'])
 
 if __name__ == '__main__':
     unittest.main()
