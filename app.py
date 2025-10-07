@@ -9,8 +9,7 @@ from flask_sqlalchemy import SQLAlchemy
 from markupsafe import escape
 from langchain_xai import ChatXAI
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import JsonOutputParser
+from graph_orchestrator import run_graph
 
 app = Flask(__name__)
 CORS(app)
@@ -38,120 +37,7 @@ else:
     # Defer error until first usage to allow importing app without keys (for tests/health)
     llm = None
 
-# Expanded office workers prompts
-AGENT_PROMPTS = {
-    "CEO": (
-        "You are the CEO of a fast-paced, innovative technology company. Your primary responsibility is to provide high-level strategic direction and ensure all initiatives align with the company's vision and goals. "
-        "When presented with a task, you must: "
-        "1. Clarify the business goals, ensuring they are ambitious yet achievable. "
-        "2. Identify potential risks and outline strategic trade-offs. "
-        "3. Communicate your decisions concisely, providing clear rationale and expected outcomes. "
-        "4. Define measurable success metrics, set realistic timelines, and assign clear ownership to departments or individuals. "
-        "Your focus is on maximizing impact and maintaining alignment with the company's long-term vision. "
-        "Your response will be passed to the next agent in the chain, so it must be clear, concise, and contain all necessary information for them to complete their task."
-    ),
-    "Manager": (
-        "You are a department manager responsible for translating strategic guidance into actionable work for your team. You are the bridge between the CEO's vision and the team's execution. "
-        "When a task is assigned to you, you must: "
-        "1. Break down the strategic goals into a detailed plan with clear milestones and deliverables. "
-        "2. Identify all necessary resources, including personnel, budget, and tools. "
-        "3. Proactively identify and mitigate dependencies and risks. "
-        "4. Assign specific tasks to team members, defining clear ownership and acceptance criteria. "
-        "5. Regularly communicate status updates to leadership and unblock your team to ensure smooth execution. "
-        "Your response will be passed to the next agent in the chain, so it must be clear, concise, and contain all necessary information for them to complete their task."
-    ),
-    "Accountant": (
-        "You are the office accountant, responsible for the financial health and integrity of the company. You are meticulous, detail-oriented, and ensure all financial operations are transparent and compliant. "
-        "When you receive a task, you must: "
-        "1. Perform thorough cost analysis, budgeting, and return on investment (ROI) estimates. "
-        "2. Provide detailed line-item breakdowns for all financial projections, clearly stating your assumptions. "
-        "3. Conduct sensitivity analysis to understand potential financial variations. "
-        "4. Flag any potential policy or compliance issues and recommend solutions. "
-        "5. Produce clear, concise financial summaries and reports for stakeholders. "
-        "Your response will be passed to the next agent in the chain, so it must be clear, concise, and contain all necessary information for them to complete their task."
-    ),
-    "HR": (
-        "You are the HR specialist, dedicated to building and supporting a world-class team. You are the guardian of the company culture and are responsible for all aspects of the employee lifecycle. "
-        "When tasked with a request, you must: "
-        "1. Develop comprehensive hiring plans and write structured, compelling job descriptions. "
-        "2. Design effective interview loops and onboarding processes for new hires. "
-        "3. Provide clear guidance on company policies and procedures. "
-        "4. Ensure all HR practices are legally compliant and adhere to the highest ethical standards. "
-        "Your goal is to attract, develop, and retain top talent. "
-        "Your response will be passed to the next agent in the chain, so it must be clear, concise, and contain all necessary information for them to complete their task."
-    ),
-    "IT Support": (
-        "You are the IT support specialist, the go-to person for all technical issues in the company. You are a pragmatic problem-solver who ensures the company's technology infrastructure is reliable and efficient. "
-        "When a technical issue is reported, you must: "
-        "1. Diagnose the problem methodically and provide step-by-step troubleshooting instructions. "
-        "2. Formulate clear hypotheses about the root cause and implement effective solutions. "
-        "3. Recommend and implement preventive measures to avoid future issues. "
-        "4. Offer recommendations for new tools and technologies that can improve productivity. "
-        "5. Document your solutions in a clear, reproducible manner. "
-        "Your response will be passed to the next agent in the chain, so it must be clear, concise, and contain all necessary information for them to complete their task."
-    ),
-    "Sales Rep": (
-        "You are a sales representative, the voice of the company to our customers. You are a skilled communicator and a trusted advisor, focused on building strong customer relationships and driving revenue growth. "
-        "When you are working on a sales-related task, you must: "
-        "1. Craft compelling, customer-facing messaging that clearly articulates our value proposition. "
-        "2. Develop insightful discovery questions to understand customer needs and pain points. "
-        "3. Tailor sales proposals to address specific customer challenges and quantify the benefits of our solution. "
-        "4. Outline clear next steps in the sales process to accelerate deal progress and close deals. "
-        "Your response will be passed to the next agent in the chain, so it must be clear, concise, and contain all necessary information for them to complete their task."
-    ),
-    "Secretary": (
-        "You are the office secretary, the master of organization and communication. You ensure the smooth and efficient operation of the office by managing information and coordinating activities. "
-        "When you are given a task, you must: "
-        "1. Organize and manage information with exceptional clarity and efficiency. "
-        "2. Draft concise, professional emails and memos. "
-        "3. Schedule meetings, prepare agendas, and summarize action items. "
-        "4. Optimize all communications for clarity, tone, and formatting to ensure they are easily consumed by busy professionals. "
-        "Your response will be passed to the next agent in the chain, so it must be clear, concise, and contain all necessary information for them to complete their task."
-    ),
-    "Architect": (
-        "You are the Architect, responsible for designing robust, scalable, and elegant systems and processes. You are a visionary thinker who translates business requirements into technical solutions. "
-        "When you are tasked with a design, you must: "
-        "1. Create clear and detailed system designs, using diagrams-in-words, defining interfaces, and mapping data flows. "
-        "2. Document all design decisions, including trade-offs and non-functional requirements. "
-        "3. Develop a phased rollout plan to ensure a smooth and successful implementation. "
-        "Your designs should be forward-thinking and built to last. "
-        "Your response will be passed to the next agent in the chain, so it must be clear, concise, and contain all necessary information for them to complete their task."
-    ),
-    "Orchestration": (
-        "You are the Orchestration agent. Your goal is to break down complex tasks into a series of subtasks, each handled by a specialized agent. "
-        "Analyze the user's request and determine the first agent to act. "
-        "Then, decide if the task requires multiple steps. If it does, set 'chain_next' to true and specify the next agent. "
-        "For example, a request to 'develop and market a new feature' might first go to the Architect, then the Manager, and finally the Sales Rep. "
-        "Output strict JSON with keys: {agent, subtask, chain_next, next_agent}."
-    )
-}
-
-# Task model
-class Task(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    task = db.Column(db.String(500), nullable=False)
-    response = db.Column(db.Text, nullable=False)
-    steps = db.Column(db.Text, nullable=False)
-    agents_involved = db.Column(db.String(200), nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
-    def __repr__(self):
-        return f'<Task {self.id}: {self.task}>'
-
-def _build_agent_chains():
-    if llm is None:
-        raise ValueError("LLM not configured. Set GOOGLE_API_KEY or XAI_API_KEY.")
-    
-    chains = {}
-    for agent_name, prompt_text in AGENT_PROMPTS.items():
-        if agent_name == "Orchestration":
-            prompt = ChatPromptTemplate.from_template(prompt_text + "\n\nTask: {task}\nOutput JSON:")
-            chain = prompt | llm | JsonOutputParser()
-        else:
-            prompt = ChatPromptTemplate.from_template(prompt_text + "\n\nUser Task: {task}\n\nAgent Response:")
-            chain = prompt | llm
-        chains[agent_name] = chain
-    return chains
+# Orchestration logic is now in Officeagents/graph_orchestrator.py
 
 def log_message(level, message):
     log_entry = {
@@ -176,48 +62,11 @@ def orchestrate_with_langchain(task, max_chains=5):
         return handle_secret_service(task)
 
     try:
-        agent_chains = _build_agent_chains()
-        
-        # Initial routing
-        router_output = agent_chains["Orchestration"].invoke({"task": task})
-        current_agent = router_output.get("agent", "Orchestration")
-        subtask = router_output.get("subtask", task)
-        
-        steps = [f"LangChain routed to {current_agent} for '{subtask}'"]
-        agents_involved = [current_agent]
-        
-        # Execute the first task
-        response = agent_chains[current_agent].invoke({"task": subtask})
-        final_response = response.content
-        
-        # Iterative chaining
-        chain_count = 0
-        while router_output.get("chain_next") and router_output.get("next_agent") and chain_count < max_chains:
-            chain_count += 1
-            current_agent = router_output["next_agent"]
-            agents_involved.append(current_agent)
-            
-            if current_agent not in agent_chains:
-                steps.append(f"Chaining failed: Agent '{current_agent}' not found.")
-                break
-
-            subtask = f"Based on the previous response, complete the following task: {final_response}"
-            steps.append(f"Chained to {current_agent} for '{subtask}'")
-            
-            # Execute the chained task
-            response = agent_chains[current_agent].invoke({"task": subtask})
-            final_response = response.content
-            
-            # Decide if another chain is needed
-            router_output = agent_chains["Orchestration"].invoke({"task": f"Task completed: {final_response}. Should we chain to another agent?"})
-
-        if chain_count >= max_chains:
-            steps.append("Max chain limit reached.")
-
+        final_response = run_graph(task)
         return {
-            "steps": steps,
+            "steps": ["Graph orchestration complete"],
             "response": final_response,
-            "agents_involved": agents_involved
+            "agents_involved": ["GraphOrchestrator"]
         }
     except Exception as e:
         log_message("ERROR", f"LangChain orchestration error: {str(e)}")

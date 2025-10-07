@@ -6,3 +6,4 @@ markupsafe
 Flask-SQLAlchemy
 langchain-google-genai
 python-dotenv
+langgraph
