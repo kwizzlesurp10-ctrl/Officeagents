@@ -3,24 +3,35 @@
 Simulates a basic business office with AI agents featuring expanded prompts, xAI LLM integration, and now LangChain-powered orchestration for dynamic routing and chaining.
 
 ## Run Commands
-- Install deps: `pip install flask langchain langchain-xai` (new for LangChain)
-- Start: `python app.py`
-- Test: `python test_app.py`
+- Install deps: `pip install -r Officeagents/requirements.txt`
+- Start: `python Officeagents/app.py`
+- Test: `python Officeagents/test_app.py`
 
 ## Env Vars
+- `GOOGLE_API_KEY`: Use Google Gemini via `langchain-google-genai`
+- `XAI_API_KEY`: Use xAI Grok via `langchain-xai`
 - `LOG_LEVEL`: DEBUG or INFO (default: INFO)
-- `XAI_API_KEY`: Required; get from https://x.ai/api (set via export XAI_API_KEY=your_key)
 - `LANGCHAIN_TEMP`: LLM temperature (default: 0.7)
+
+Set one of `GOOGLE_API_KEY` or `XAI_API_KEY`. You can export them in your shell:
+
+```bash
+export GOOGLE_API_KEY="your_google_api_key"
+# or
+export XAI_API_KEY="your_xai_api_key"
+```
+
+Alternatively, copy `.env.example` to `.env` and fill in values. The app automatically loads `.env` via `python-dotenv`.
 
 ## Ports Used
 - App: 0.0.0.0:8000 (access at http://localhost:8000)
 
 ## Test Instructions
-Run `python test_app.py`—all tests should pass. Covers health, LangChain orchestration (mocked), validation, prompts, success/fallback.
+Run `python Officeagents/test_app.py` — tests cover health, LangChain orchestration (mocked), validation, prompts, and success/fallback paths.
 
 For errors:
 1. Check logs in terminal (JSON format).
-2. "XAI_API_KEY required": Set env var with your xAI API key from https://x.ai/api.
+2. "GOOGLE_API_KEY or XAI_API_KEY required": Set one of these env vars.
 3. "No module named 'langchain'": `pip install langchain langchain-xai`.
 4. If port bind fails: Kill process on 8000 (`lsof -ti:8000 | xargs kill -9`), retry.
 5. Invalid task: Keep 1-500 chars.

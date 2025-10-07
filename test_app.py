@@ -22,19 +22,18 @@ class TestOfficeCube(unittest.TestCase):
         data = rv.get_json()
         self.assertEqual(data['status'], 'healthy')
 
-    @unittest.mock.patch('langchain_core.output_parsers.JsonOutputParser')
-    @unittest.mock.patch('app.llm')
-    def test_orchestrate_langchain(self, mock_llm, mock_parser):
+    @unittest.mock.patch('app.db.session.commit')
+    @unittest.mock.patch('app.db.session.add')
+    @unittest.mock.patch('app._build_agent_chains')
+    def test_orchestrate_langchain(self, mock_build_chains, mock_db_add, mock_db_commit):
         """Integration: LangChain orchestration with mocks."""
-        mock_chain = unittest.mock.MagicMock()
-        mock_chain.invoke.return_value = "Mock response"
-        mock_llm.return_value = mock_chain
-        mock_parser.return_value = mock_chain
-
-        # Mock router output
-        mock_router = unittest.mock.MagicMock()
-        mock_router.invoke.return_value = {"agent": "CEO", "subtask": "Test", "chain_next": False}
-        # Patch agent_chains indirectly via global mock
+        mock_chains = {
+            "Orchestration": unittest.mock.MagicMock(),
+            "CEO": unittest.mock.MagicMock()
+        }
+        mock_chains["Orchestration"].invoke.return_value = {"agent": "CEO", "subtask": "Test", "chain_next": False}
+        mock_chains["CEO"].invoke.return_value.content = "Mock response"
+        mock_build_chains.return_value = mock_chains
 
         rv = self.client.post('/orchestrate', json={'task': 'Strategy plan'})
         self.assertEqual(rv.status_code, 200)
@@ -55,19 +54,39 @@ class TestOfficeCube(unittest.TestCase):
             self.assertGreater(len(prompt), 100)  # Ensures expansion
             self.assertIn("You are", prompt)  # Basic structure check
 
-    @unittest.mock.patch('app.llm')
-    def test_orchestrate_with_langchain_success(self, mock_llm):
+    @unittest.mock.patch('app._build_agent_chains')
+    def test_orchestrate_with_langchain_success(self, mock_build_chains):
         """Unit: LangChain orchestration succeeds."""
-        mock_chain = unittest.mock.MagicMock()
-        mock_chain.invoke.side_effect = [
-            {"agent": "CEO", "subtask": "Test", "chain_next": False},  # Router
-            "CEO Response"  # Agent
-        ]
-        mock_llm.return_value = mock_chain
+        mock_chains = {
+            "Orchestration": unittest.mock.MagicMock(),
+            "CEO": unittest.mock.MagicMock()
+        }
+        mock_chains["Orchestration"].invoke.return_value = {"agent": "CEO", "subtask": "Test", "chain_next": False}
+        mock_chains["CEO"].invoke.return_value.content = "CEO Response"
+        mock_build_chains.return_value = mock_chains
 
         result = orchestrate_with_langchain("Test task")
         self.assertIn("CEO", str(result['agents_involved']))
         self.assertEqual(result['response'], "CEO Response")
+
+    @unittest.mock.patch('app._build_agent_chains')
+    def test_orchestrate_with_chaining(self, mock_build_chains):
+        """Unit: LangChain orchestration with chaining."""
+        mock_chains = {
+            "Orchestration": unittest.mock.MagicMock(),
+            "Manager": unittest.mock.MagicMock(),
+            "Architect": unittest.mock.MagicMock()
+        }
+        
+        mock_chains["Orchestration"].invoke.return_value = {"agent": "Manager", "subtask": "Plan the project", "chain_next": True, "next_agent": "Architect"}
+        mock_chains["Manager"].invoke.return_value.content = "Project plan"
+        mock_chains["Architect"].invoke.return_value.content = "System design"
+        mock_build_chains.return_value = mock_chains
+
+        result = orchestrate_with_langchain("Develop a new feature")
+        self.assertIn("Manager", str(result['agents_involved']))
+        self.assertIn("Architect", str(result['agents_involved']))
+        self.assertEqual(result['response'], "System design")
 
     @unittest.mock.patch('app.llm')
     def test_orchestrate_with_langchain_fallback(self, mock_llm):
