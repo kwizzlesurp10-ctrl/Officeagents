@@ -1,0 +1,7 @@
+flask
+langchain
+langchain-xai
+flask_cors
+markupsafe
+Flask-SQLAlchemy
+langchain-google-genai

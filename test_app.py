@@ -23,7 +23,7 @@ class TestOfficeCube(unittest.TestCase):
         self.assertEqual(data['status'], 'healthy')
 
     @unittest.mock.patch('langchain_core.output_parsers.JsonOutputParser')
-    @unittest.mock.patch('langchain_xai.ChatXAI')
+    @unittest.mock.patch('app.llm')
     def test_orchestrate_langchain(self, mock_llm, mock_parser):
         """Integration: LangChain orchestration with mocks."""
         mock_chain = unittest.mock.MagicMock()
@@ -55,7 +55,7 @@ class TestOfficeCube(unittest.TestCase):
             self.assertGreater(len(prompt), 100)  # Ensures expansion
             self.assertIn("You are", prompt)  # Basic structure check
 
-    @unittest.mock.patch('langchain_xai.ChatXAI')
+    @unittest.mock.patch('app.llm')
     def test_orchestrate_with_langchain_success(self, mock_llm):
         """Unit: LangChain orchestration succeeds."""
         mock_chain = unittest.mock.MagicMock()
@@ -69,7 +69,7 @@ class TestOfficeCube(unittest.TestCase):
         self.assertIn("CEO", str(result['agents_involved']))
         self.assertEqual(result['response'], "CEO Response")
 
-    @unittest.mock.patch('langchain_xai.ChatXAI')
+    @unittest.mock.patch('app.llm')
     def test_orchestrate_with_langchain_fallback(self, mock_llm):
         """Unit: LangChain orchestration falls back on error."""
         mock_llm.side_effect = Exception("Chain error")
@@ -77,6 +77,24 @@ class TestOfficeCube(unittest.TestCase):
         result = orchestrate_with_langchain("Test task")
         self.assertIn("Fallback", result['steps'][0])
         self.assertIn("Error", result['response'])
+
+    @unittest.mock.patch.dict(os.environ, {"GOOGLE_API_KEY": "test_key"})
+    @unittest.mock.patch('langchain_google_genai.ChatGoogleGenerativeAI')
+    def test_google_llm_selection(self, mock_google_llm):
+        """Unit: Selects Google LLM when GOOGLE_API_KEY is set."""
+        import importlib
+        import app
+        importlib.reload(app)
+        mock_google_llm.assert_called_with(model="gemini-pro", google_api_key="test_key", temperature=0.7)
+
+    @unittest.mock.patch.dict(os.environ, {"XAI_API_KEY": "test_key"})
+    @unittest.mock.patch('langchain_xai.ChatXAI')
+    def test_xai_llm_selection(self, mock_xai_llm):
+        """Unit: Selects XAI LLM when XAI_API_KEY is set."""
+        import importlib
+        import app
+        importlib.reload(app)
+        mock_xai_llm.assert_called_with(model="grok-beta", xai_api_key="test_key", temperature=0.7)
 
 if __name__ == '__main__':
     unittest.main()
